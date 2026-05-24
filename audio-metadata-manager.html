@@ -550,17 +550,24 @@ function doAutoFill(artist, album) {
 function handleArtFile(event) {
   const file = event.target.files[0];
   if (!file || !currentArtist || !currentAlbum) return;
-  const url = URL.createObjectURL(file);
-  library[currentArtist].albums[currentAlbum].art = url;
-  library[currentArtist].albums[currentAlbum].artBlob = file;
-  markDirty();
-  // Update art box
-  const drop = document.getElementById('art-drop');
-  if (drop) {
-    let img = document.getElementById('art-img');
-    if (!img) { img = document.createElement('img'); img.id = 'art-img'; drop.prepend(img); }
-    img.src = url;
-  }
+  const reader = new FileReader();
+  reader.onload = e => {
+    const dataUrl = e.target.result;
+    const b64 = dataUrl.split(',')[1];
+    const mime = file.type || 'image/jpeg';
+    const albumData = library[currentArtist].albums[currentAlbum];
+    albumData.art = dataUrl;
+    albumData.artB64 = b64;
+    albumData.artMime = mime;
+    markDirty();
+    const drop = document.getElementById('art-drop');
+    if (drop) {
+      let img = document.getElementById('art-img');
+      if (!img) { img = document.createElement('img'); img.id = 'art-img'; drop.prepend(img); }
+      img.src = dataUrl;
+    }
+  };
+  reader.readAsDataURL(file);
   event.target.value = '';
 }
 
@@ -626,13 +633,34 @@ function exportScript() {
     'TRACKS = ['
   ];
 
+  // Build ART dict: key = "artist:::album", value = {b64, mime}
+  const artDict = {};
   for (const artist of Object.keys(library).sort()) {
     for (const album of Object.keys(library[artist].albums).sort()) {
       const data = library[artist].albums[album];
+      if (data.artB64) {
+        artDict[artist + ':::' + album] = { b64: data.artB64, mime: data.artMime || 'image/jpeg' };
+      }
+    }
+  }
+
+  // Emit ART_DATA dict
+  lines.push('ART_DATA = {');
+  for (const [key, val] of Object.entries(artDict)) {
+    const ext2 = val.mime === 'image/png' ? 'png' : 'jpg';
+    lines.push(`    ${JSON.stringify(key)}: {"b64": ${JSON.stringify(val.b64)}, "mime": ${JSON.stringify(val.mime)}, "ext": ${JSON.stringify(ext2)}},`);
+  }
+  lines.push('}');
+  lines.push('');
+
+  // Emit TRACKS list
+  for (const artist of Object.keys(library).sort()) {
+    for (const album of Object.keys(library[artist].albums).sort()) {
+      const data = library[artist].albums[album];
+      const artKey = (data.artB64) ? (artist + ':::' + album) : '';
       for (const t of data.tracks) {
         if (!t.filename) continue;
-        const artPath = data.artBlob ? `__ART__/${artist}/${album}/cover.jpg` : '';
-        lines.push(`    {"artist": ${JSON.stringify(t.artist)}, "album": ${JSON.stringify(t.album)}, "title": ${JSON.stringify(t.title)}, "track": ${t.num}, "filename": ${JSON.stringify(t.filename)}, "folder": ${JSON.stringify(artist + '/' + album)}, "art": ${JSON.stringify(artPath)}},`);
+        lines.push(`    {"artist": ${JSON.stringify(t.artist)}, "album": ${JSON.stringify(t.album)}, "title": ${JSON.stringify(t.title)}, "track": ${t.num}, "filename": ${JSON.stringify(t.filename)}, "folder": ${JSON.stringify(artist + '/' + album)}, "art_key": ${JSON.stringify(artKey)}},`);
       }
     }
   }
@@ -640,8 +668,19 @@ function exportScript() {
   lines.push(
     ']',
     '',
-    '# !! Set this to your music root folder !!',
-    'ROOT = Path(r"C:/YOUR/MUSIC/ROOT")',
+    '# Script runs from the music root directory (place it there and run: python3 update_metadata.py)',
+    'ROOT = Path(__file__).parent',
+    '',
+    '# Write uploaded art to disk first',
+    'import base64, tempfile',
+    'art_paths = {}',
+    'for key, art in ART_DATA.items():',
+    '    artist_p, album_p = key.split(":::", 1)',
+    '    dest = ROOT / artist_p / album_p / f"cover.{art[\'ext\']}"',
+    '    dest.parent.mkdir(parents=True, exist_ok=True)',
+    '    dest.write_bytes(base64.b64decode(art["b64"]))',
+    '    art_paths[key] = str(dest)',
+    '    print(f"Art  {dest.relative_to(ROOT)}")',
     '',
     'processed = 0',
     'errors = []',
@@ -650,13 +689,13 @@ function exportScript() {
     '    if not path.exists():',
     '        errors.append(f"Not found: {path}"); continue',
     '    ext = path.suffix.lower()',
-    '    art = t["art"] or None',
+    '    art = art_paths.get(t["art_key"]) if t["art_key"] else None',
     '    try:',
     '        if ext == ".mp3":    set_mp3(str(path), t["title"], t["artist"], t["album"], t["track"], art)',
     '        elif ext == ".m4a":  set_m4a(str(path), t["title"], t["artist"], t["album"], t["track"], art)',
     '        elif ext == ".wma":  set_wma(str(path), t["title"], t["artist"], t["album"], t["track"])',
     '        processed += 1',
-    '        print(f"OK  {path.name}")',
+    '        print(f"OK   {path.name}")',
     '    except Exception as e:',
     '        errors.append(f"Error {path}: {e}")',
     '',
@@ -668,7 +707,7 @@ function exportScript() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = 'update_metadata.py'; a.click();
   URL.revokeObjectURL(url);
-  toast('Script downloaded — edit ROOT path then run with Python');
+  toast('Script downloaded — drop it in your music root folder and run with Python');
 }
 
 // ── Stats ─────────────────────────────────────────────

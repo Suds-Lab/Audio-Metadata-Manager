@@ -32,14 +32,16 @@ Click **"Open Music Folder"** and select your root music directory. The app scan
 
 ### 4. Export and apply
 Click **"Export Script"** to download `update_metadata.py`.  
-Open the script, set the `ROOT` variable to your music folder path, then run:
+Drop the script into your **music root folder** (the same folder you opened in the app), then run:
 
 ```bash
 pip install mutagen
 python3 update_metadata.py
 ```
 
-The script prints a line for each file processed and lists any errors at the end.
+No path configuration needed — the script uses its own location as the root. It prints a line for each file processed and lists any errors at the end.
+
+> **Album art:** any cover images you upload in the GUI are base64-encoded and embedded directly in the script. When you run it, they are decoded and written to disk as `cover.jpg` inside each album folder, then embedded into the audio files.
 
 ---
 
@@ -72,6 +74,7 @@ Music Root/
 |------|-------------|
 | Running the GUI | Chrome or Edge (any recent version) |
 | Writing metadata to files | Python 3.7+ · `pip install mutagen` |
+| Running the export script | Drop `update_metadata.py` in your music root folder |
 
 ---
 
