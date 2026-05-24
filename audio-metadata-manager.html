@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Audio Metadata Manager</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f0f0f;
+    --bg2: #181818;
+    --bg3: #222222;
+    --bg4: #2a2a2a;
+    --border: #333;
+    --border2: #444;
+    --text: #e8e8e8;
+    --text2: #999;
+    --text3: #666;
+    --accent: #c8a96e;
+    --accent2: #e8c98e;
+    --accent-bg: rgba(200,169,110,0.1);
+    --accent-border: rgba(200,169,110,0.3);
+    --danger: #e07070;
+    --success: #70c090;
+    --radius: 6px;
+    --font: 'IBM Plex Sans', sans-serif;
+    --mono: 'IBM Plex Mono', monospace;
+  }
+
+  html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; }
+
+  /* ── Layout ── */
+  #shell { display: flex; flex-direction: column; height: 100vh; }
+  #header { display: flex; align-items: center; gap: 12px; padding: 0 16px; height: 48px; border-bottom: 1px solid var(--border); flex-shrink: 0; background: var(--bg); }
+  #header h1 { font-size: 13px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); font-family: var(--mono); }
+  #header .spacer { flex: 1; }
+  #body { display: flex; flex: 1; overflow: hidden; }
+
+  /* ── Sidebar ── */
+  #sidebar { width: 270px; min-width: 270px; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--bg); overflow: hidden; }
+  #sidebar-top { padding: 10px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+  #open-btn { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 9px; border-radius: var(--radius); border: 1px solid var(--accent-border); background: var(--accent-bg); color: var(--accent); cursor: pointer; font-family: var(--font); font-size: 12px; font-weight: 500; letter-spacing: 0.04em; transition: all 0.15s; width: 100%; }
+  #open-btn:hover { background: rgba(200,169,110,0.18); border-color: var(--accent); }
+  #search { width: 100%; padding: 7px 10px; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-family: var(--font); font-size: 12px; outline: none; }
+  #search:focus { border-color: var(--accent-border); }
+  #search::placeholder { color: var(--text3); }
+  #tree { flex: 1; overflow-y: auto; padding: 4px 0; }
+  #tree::-webkit-scrollbar { width: 4px; }
+  #tree::-webkit-scrollbar-track { background: transparent; }
+  #tree::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+  .artist-row { display: flex; align-items: center; gap: 6px; padding: 6px 10px; cursor: pointer; color: var(--text2); font-size: 12px; font-weight: 500; letter-spacing: 0.03em; text-transform: uppercase; transition: color 0.1s; }
+  .artist-row:hover { color: var(--text); }
+  .artist-row .chevron { font-size: 10px; transition: transform 0.2s; display: inline-block; color: var(--text3); }
+  .artist-row.open .chevron { transform: rotate(90deg); }
+  .artist-row .count { margin-left: auto; font-size: 10px; color: var(--text3); font-family: var(--mono); }
+
+  .album-list { display: none; }
+  .album-list.open { display: block; }
+  .album-row { display: flex; align-items: center; gap: 6px; padding: 5px 10px 5px 24px; cursor: pointer; color: var(--text2); font-size: 12px; border-left: 2px solid transparent; transition: all 0.1s; }
+  .album-row:hover { color: var(--text); background: var(--bg2); }
+  .album-row.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-bg); }
+  .album-row .dirty-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); margin-left: auto; flex-shrink: 0; }
+
+  /* ── Main panel ── */
+  #main { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+  #topbar { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 44px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  #breadcrumb { font-family: var(--mono); font-size: 11px; color: var(--text3); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #breadcrumb span { color: var(--text2); }
+  .tb-btn { display: flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: var(--radius); border: 1px solid var(--border2); background: transparent; color: var(--text2); font-family: var(--font); font-size: 11px; cursor: pointer; transition: all 0.1s; white-space: nowrap; }
+  .tb-btn:hover { border-color: var(--border2); color: var(--text); background: var(--bg3); }
+  .tb-btn.accent { border-color: var(--accent-border); color: var(--accent); background: var(--accent-bg); }
+  .tb-btn.accent:hover { background: rgba(200,169,110,0.18); border-color: var(--accent); }
+
+  #editor { flex: 1; overflow-y: auto; padding: 16px; }
+  #editor::-webkit-scrollbar { width: 4px; }
+  #editor::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+  /* ── Album header ── */
+  #album-meta { display: flex; gap: 16px; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+  #art-drop { width: 100px; height: 100px; flex-shrink: 0; border-radius: var(--radius); border: 1px dashed var(--border2); background: var(--bg2); cursor: pointer; overflow: hidden; position: relative; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 4px; transition: border-color 0.15s; }
+  #art-drop:hover { border-color: var(--accent); }
+  #art-drop img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  #art-drop .art-hint { font-size: 10px; color: var(--text3); text-align: center; line-height: 1.4; padding: 4px; position: relative; z-index: 1; }
+  #art-drop .art-icon { font-size: 20px; position: relative; z-index: 1; }
+  #art-drop .art-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.15s; z-index: 2; font-size: 10px; color: #fff; }
+  #art-drop:hover .art-overlay { opacity: 1; }
+  #art-file { display: none; }
+
+  #meta-fields { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-content: start; }
+  .meta-field { display: flex; flex-direction: column; gap: 4px; }
+  .meta-field label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text3); font-family: var(--mono); }
+  .meta-field input { padding: 6px 8px; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-family: var(--font); font-size: 12px; outline: none; transition: border-color 0.1s; }
+  .meta-field input:focus { border-color: var(--accent-border); }
+  #bulk-row { grid-column: 1 / -1; display: flex; gap: 6px; }
+  .bulk-btn { padding: 5px 10px; border-radius: var(--radius); border: 1px solid var(--border); background: transparent; color: var(--text2); font-size: 11px; cursor: pointer; font-family: var(--font); transition: all 0.1s; }
+  .bulk-btn:hover { background: var(--bg3); color: var(--text); }
+
+  /* ── Track table ── */
+  #track-header { display: grid; grid-template-columns: 36px 1fr 160px 54px 32px; gap: 8px; padding: 4px 8px; margin-bottom: 4px; }
+  .th { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text3); font-family: var(--mono); }
+  .track-row { display: grid; grid-template-columns: 36px 1fr 160px 54px 32px; gap: 8px; align-items: center; padding: 4px 8px; border-radius: var(--radius); border: 1px solid transparent; margin-bottom: 3px; background: var(--bg2); transition: border-color 0.1s; }
+  .track-row:hover { border-color: var(--border); }
+  .track-row.modified { border-color: var(--accent-border); }
+  .t-num { font-size: 11px; color: var(--text3); font-family: var(--mono); text-align: center; }
+  .t-inp { width: 100%; background: transparent; border: none; color: var(--text); font-family: var(--font); font-size: 12px; outline: none; padding: 2px 4px; border-radius: 3px; }
+  .t-inp:focus { background: var(--bg3); }
+  .t-num-inp { width: 100%; background: transparent; border: none; color: var(--text2); font-family: var(--mono); font-size: 11px; text-align: center; outline: none; }
+  .t-num-inp:focus { background: var(--bg3); border-radius: 3px; }
+  .t-del { background: none; border: none; color: var(--text3); cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 3px; display: flex; align-items: center; justify-content: center; }
+  .t-del:hover { color: var(--danger); background: rgba(224,112,112,0.1); }
+
+  /* ── Empty/loading states ── */
+  #empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: var(--text3); }
+  #empty .big-icon { font-size: 48px; opacity: 0.3; }
+  #empty p { font-size: 13px; }
+  #empty .sub { font-size: 11px; font-family: var(--mono); }
+
+  /* ── Toast ── */
+  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--bg3); border: 1px solid var(--border2); padding: 8px 18px; border-radius: 20px; font-size: 12px; color: var(--text); pointer-events: none; opacity: 0; transition: opacity 0.2s; z-index: 999; white-space: nowrap; }
+  #toast.show { opacity: 1; }
+
+  /* ── Progress bar ── */
+  #scan-bar { display: none; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--text2); font-family: var(--mono); flex-shrink: 0; }
+  #scan-bar.visible { display: flex; }
+  #scan-progress { flex: 1; height: 2px; background: var(--border); border-radius: 1px; overflow: hidden; }
+  #scan-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.1s; }
+
+  /* ── Stats bar ── */
+  #statsbar { display: flex; gap: 16px; padding: 6px 16px; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--text3); font-family: var(--mono); flex-shrink: 0; }
+  #statsbar span b { color: var(--accent); font-weight: 500; }
+</style>
+</head>
+<body>
+
+<div id="shell">
+  <div id="header">
+    <h1>⟁ Audio Metadata Manager</h1>
+    <div class="spacer"></div>
+    <button class="tb-btn" onclick="exportScript()">⬇ Export Script</button>
+    <button class="tb-btn accent" onclick="saveChanges()">✓ Save</button>
+  </div>
+  <div id="scan-bar">
+    <span id="scan-msg">Scanning…</span>
+    <div id="scan-progress"><div id="scan-fill"></div></div>
+    <span id="scan-count"></span>
+  </div>
+  <div id="body">
+    <div id="sidebar">
+      <div id="sidebar-top">
+        <button id="open-btn" onclick="openFolder()">⊕ Open Music Folder</button>
+        <input id="search" type="text" placeholder="Search…" oninput="filterTree(this.value)" />
+      </div>
+      <div id="tree"></div>
+    </div>
+    <div id="main">
+      <div id="topbar">
+        <div id="breadcrumb">—</div>
+        <button class="tb-btn" onclick="autoFillCurrent()" title="Auto-fill from folder names">⟳ Auto-fill album</button>
+        <button class="tb-btn" onclick="autoFillAll()" title="Auto-fill entire library">⟳ Auto-fill all</button>
+        <button class="tb-btn" onclick="addTrack()">+ Track</button>
+      </div>
+      <div id="statsbar" style="display:none">
+        <span>Artists: <b id="s-artists">0</b></span>
+        <span>Albums: <b id="s-albums">0</b></span>
+        <span>Tracks: <b id="s-tracks">0</b></span>
+        <span>Modified: <b id="s-dirty">0</b></span>
+      </div>
+      <div id="editor">
+        <div id="empty">
+          <div class="big-icon">♫</div>
+          <p>Open your music folder to begin</p>
+          <p class="sub">Chrome or Edge required · File System Access API</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<input type="file" id="art-file" accept="image/*" onchange="handleArtFile(event)" />
+
+<script>
+// ── State ──────────────────────────────────────────────
+let library = {};     // artist -> { albums: { albumName -> { tracks:[], art:null, artBlob:null, handle, artistHandle, albumHandle } } }
+let rootHandle = null;
+let currentArtist = null;
+let currentAlbum = null;
+let openNodes = {};
+let dirty = new Set();
+let modifiedTracks = new Set();
+let filterText = '';
+
+const AUDIO_EXT = new Set(['mp3','m4a','wma','flac','ogg','aac','wav']);
+const IMAGE_EXT = new Set(['jpg','jpeg','png','webp']);
+const ART_PREFER = ['folder.jpg','albumartsmall.jpg','folder.jpeg','cover.jpg','cover.png','artwork.jpg'];
+
+function ext(name) { return (name.split('.').pop() || '').toLowerCase(); }
+function stripNum(name) {
+  return name.replace(/\.[^.]+$/, '') || 'Track';
+}
+
+// ── Folder scanning ────────────────────────────────────
+async function openFolder() {
+  try {
+    rootHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    library = {};
+    dirty.clear();
+    modifiedTracks.clear();
+    await scanRoot(rootHandle);
+    buildTree();
+    updateStats();
+    document.getElementById('statsbar').style.display = 'flex';
+    toast(`Loaded ${Object.keys(library).length} artists`);
+  } catch(e) {
+    if (e.name !== 'AbortError') toast('Error: ' + e.message, true);
+  }
+}
+
+async function scanRoot(root) {
+  const bar = document.getElementById('scan-bar');
+  const fill = document.getElementById('scan-fill');
+  const msg = document.getElementById('scan-msg');
+  const cnt = document.getElementById('scan-count');
+  bar.classList.add('visible');
+  let fileCount = 0;
+
+  // Collect artist dirs
+  const artistEntries = [];
+  for await (const [name, handle] of root.entries()) {
+    if (handle.kind === 'directory' && !name.startsWith('.')) {
+      artistEntries.push([name, handle]);
+    }
+  }
+
+  for (let ai = 0; ai < artistEntries.length; ai++) {
+    const [artistName, artistHandle] = artistEntries[ai];
+    fill.style.width = Math.round((ai / artistEntries.length) * 100) + '%';
+    msg.textContent = 'Scanning ' + artistName;
+
+    // Check if artist dir has audio files directly (no album subfolder)
+    const directFiles = [];
+    const albumEntries = [];
+    const artFiles = {};
+
+    for await (const [name, handle] of artistHandle.entries()) {
+      if (handle.kind === 'file') {
+        const e = ext(name);
+        if (AUDIO_EXT.has(e)) directFiles.push([name, handle]);
+        if (IMAGE_EXT.has(e)) artFiles[name.toLowerCase()] = handle;
+      } else if (handle.kind === 'directory' && !name.startsWith('.')) {
+        albumEntries.push([name, handle]);
+      }
+    }
+
+    if (!library[artistName]) library[artistName] = { albums: {} };
+
+    // Direct files = one album named after artist (standalone — no artist)
+    if (directFiles.length > 0) {
+      const albumName = artistName;
+      const tracks = buildTracks(directFiles, '', albumName);
+      const art = await resolveArt(artFiles);
+      library[artistName].albums[albumName] = { tracks, art, artBlob: null, handle: artistHandle, artistHandle, albumHandle: artistHandle };
+      fileCount += tracks.length;
+      cnt.textContent = fileCount + ' files';
+    }
+
+    // Subfolders = albums
+    for (const [albumName, albumHandle] of albumEntries) {
+      const audioFiles = [];
+      const albumArtFiles = {};
+      for await (const [name, handle] of albumHandle.entries()) {
+        if (handle.kind === 'file') {
+          const e = ext(name);
+          if (AUDIO_EXT.has(e)) audioFiles.push([name, handle]);
+          if (IMAGE_EXT.has(e)) albumArtFiles[name.toLowerCase()] = handle;
+          // Also check nested (one level deep, e.g. Olomeinu/Best Of...)
+        } else if (handle.kind === 'directory' && !name.startsWith('.')) {
+          // nested subfolder
+          const nestedAudio = [];
+          const nestedArt = {};
+          for await (const [n2, h2] of handle.entries()) {
+            if (h2.kind === 'file') {
+              const e2 = ext(n2);
+              if (AUDIO_EXT.has(e2)) nestedAudio.push([n2, h2]);
+              if (IMAGE_EXT.has(e2)) nestedArt[n2.toLowerCase()] = h2;
+            }
+          }
+          if (nestedAudio.length > 0) {
+            const nestedAlbumName = name;
+            const tracks = buildTracks(nestedAudio, artistName, nestedAlbumName);
+            const art = await resolveArt(nestedArt);
+            library[artistName].albums[nestedAlbumName] = { tracks, art, artBlob: null, handle: handle, artistHandle, albumHandle: handle };
+            fileCount += tracks.length;
+            cnt.textContent = fileCount + ' files';
+          }
+        }
+      }
+      if (audioFiles.length > 0) {
+        const tracks = buildTracks(audioFiles, artistName, albumName);
+        const art = await resolveArt(albumArtFiles);
+        library[artistName].albums[albumName] = { tracks, art, artBlob: null, handle: albumHandle, artistHandle, albumHandle };
+        fileCount += tracks.length;
+        cnt.textContent = fileCount + ' files';
+      }
+    }
+
+    // Remove empty artist
+    if (Object.keys(library[artistName].albums).length === 0) {
+      delete library[artistName];
+    }
+  }
+
+  fill.style.width = '100%';
+  setTimeout(() => bar.classList.remove('visible'), 600);
+}
+
+function buildTracks(files, artist, album) {
+  // Sort by filename
+  files.sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
+  return files.map(([name, handle], i) => {
+    const numMatch = name.match(/^(\d+)/);
+    const trackNum = numMatch ? parseInt(numMatch[1]) : i + 1;
+    return {
+      filename: name,
+      handle,
+      title: stripNum(name),
+      artist,
+      album,
+      num: trackNum,
+      modified: false
+    };
+  });
+}
+
+async function resolveArt(artFiles) {
+  for (const preferred of ART_PREFER) {
+    if (artFiles[preferred]) {
+      try {
+        const file = await artFiles[preferred].getFile();
+        return URL.createObjectURL(file);
+      } catch(e) {}
+    }
+  }
+  // Any image
+  for (const key of Object.keys(artFiles)) {
+    try {
+      const file = await artFiles[key].getFile();
+      return URL.createObjectURL(file);
+    } catch(e) {}
+  }
+  return null;
+}
+
+// ── Tree ──────────────────────────────────────────────
+function buildTree() {
+  const tree = document.getElementById('tree');
+  tree.innerHTML = '';
+  const f = filterText.toLowerCase();
+  const artists = Object.keys(library).sort();
+  for (const artist of artists) {
+    const albums = Object.keys(library[artist].albums).sort();
+    const matchArtist = !f || artist.toLowerCase().includes(f);
+    const visAlbums = albums.filter(a => matchArtist || a.toLowerCase().includes(f));
+    if (!visAlbums.length) continue;
+
+    const artistDiv = document.createElement('div');
+
+    const row = document.createElement('div');
+    row.className = 'artist-row' + (openNodes[artist] || f ? ' open' : '');
+    row.innerHTML = `<span class="chevron">▶</span><span style="flex:1">${artist}</span><span class="count">${albums.length}</span>`;
+    row.onclick = () => { openNodes[artist] = !openNodes[artist]; buildTree(); };
+    artistDiv.appendChild(row);
+
+    const list = document.createElement('div');
+    list.className = 'album-list' + (openNodes[artist] || f ? ' open' : '');
+    for (const album of visAlbums) {
+      const isDirty = dirty.has(artist + ':::' + album);
+      const arow = document.createElement('div');
+      arow.className = 'album-row' + (currentArtist === artist && currentAlbum === album ? ' active' : '');
+      arow.innerHTML = album + (isDirty ? '<span class="dirty-dot"></span>' : '');
+      arow.onclick = (e) => { e.stopPropagation(); openNodes[artist] = true; selectAlbum(artist, album); };
+      list.appendChild(arow);
+    }
+    artistDiv.appendChild(list);
+    tree.appendChild(artistDiv);
+  }
+}
+
+function filterTree(val) { filterText = val; buildTree(); }
+
+// ── Editor ────────────────────────────────────────────
+function selectAlbum(artist, album) {
+  currentArtist = artist; currentAlbum = album;
+  buildTree();
+  renderEditor();
+}
+
+function renderEditor() {
+  const editor = document.getElementById('editor');
+  const bc = document.getElementById('breadcrumb');
+  if (!currentArtist || !currentAlbum) return;
+  const data = library[currentArtist][currentAlbum] = library[currentArtist].albums[currentAlbum];
+  if (!data) return;
+  bc.innerHTML = `<span>${currentArtist}</span> / ${currentAlbum}`;
+
+  editor.innerHTML = `
+    <div id="album-meta">
+      <div id="art-drop" onclick="document.getElementById('art-file').click()" title="Click to upload album art">
+        ${data.art ? `<img id="art-img" src="${data.art}" alt="album art">` : ''}
+        <div class="art-overlay">Change art</div>
+        ${!data.art ? `<div class="art-icon">⊞</div><div class="art-hint">Click to<br>upload art</div>` : ''}
+      </div>
+      <div id="meta-fields">
+        <div class="meta-field">
+          <label>Artist</label>
+          <input id="f-artist" type="text" value="${esc(data.tracks[0]?.artist || currentArtist)}" oninput="albumFieldChange()" />
+        </div>
+        <div class="meta-field">
+          <label>Album</label>
+          <input id="f-album" type="text" value="${esc(currentAlbum)}" oninput="albumFieldChange()" />
+        </div>
+        <div id="bulk-row">
+          <button class="bulk-btn" onclick="bulkSet('artist')">Set artist → all tracks</button>
+          <button class="bulk-btn" onclick="bulkSet('album')">Set album → all tracks</button>
+          <button class="bulk-btn" onclick="bulkSet('both')">Set both → all tracks</button>
+        </div>
+      </div>
+    </div>
+    <div id="track-header">
+      <div class="th">#</div>
+      <div class="th">Title</div>
+      <div class="th">Artist</div>
+      <div class="th">Track #</div>
+      <div class="th"></div>
+    </div>
+    <div id="track-list"></div>
+    <div style="padding:8px 0">
+      <button class="bulk-btn" onclick="addTrack()">+ Add track</button>
+    </div>
+  `;
+  renderTracks();
+}
+
+function renderTracks() {
+  const list = document.getElementById('track-list');
+  if (!list) return;
+  const data = library[currentArtist].albums[currentAlbum];
+  list.innerHTML = data.tracks.map((t, i) => `
+    <div class="track-row${t.modified ? ' modified' : ''}" id="tr-${i}">
+      <div class="t-num">${i+1}</div>
+      <input class="t-inp" style="font-weight:400" value="${esc(t.title)}" oninput="trackChange(${i},'title',this.value)" placeholder="Title" />
+      <input class="t-inp" style="color:var(--text2)" value="${esc(t.artist)}" oninput="trackChange(${i},'artist',this.value)" placeholder="Artist" />
+      <input class="t-num-inp" type="number" value="${t.num}" min="1" oninput="trackChange(${i},'num',parseInt(this.value)||${i+1})" />
+      <button class="t-del" onclick="removeTrack(${i})" title="Remove">✕</button>
+    </div>
+  `).join('');
+}
+
+function esc(s) { return (s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+
+function trackChange(i, field, val) {
+  const data = library[currentArtist].albums[currentAlbum];
+  data.tracks[i][field] = val;
+  data.tracks[i].modified = true;
+  const row = document.getElementById('tr-' + i);
+  if (row) row.classList.add('modified');
+  markDirty();
+}
+
+function albumFieldChange() {
+  markDirty();
+}
+
+function bulkSet(which) {
+  const data = library[currentArtist].albums[currentAlbum];
+  const artist = document.getElementById('f-artist').value;
+  const album = document.getElementById('f-album').value;
+  data.tracks.forEach(t => {
+    if (which === 'artist' || which === 'both') t.artist = artist;
+    if (which === 'album' || which === 'both') t.album = album;
+    t.modified = true;
+  });
+  markDirty();
+  renderTracks();
+  toast('Applied to all tracks');
+}
+
+function addTrack() {
+  if (!currentArtist || !currentAlbum) return;
+  const data = library[currentArtist].albums[currentAlbum];
+  const lastNum = data.tracks.length > 0 ? data.tracks[data.tracks.length-1].num + 1 : 1;
+  data.tracks.push({ filename: '', handle: null, title: 'New Track', artist: data.tracks[0]?.artist || currentArtist, album: currentAlbum, num: lastNum, modified: true });
+  markDirty();
+  renderTracks();
+}
+
+function removeTrack(i) {
+  const data = library[currentArtist].albums[currentAlbum];
+  data.tracks.splice(i, 1);
+  markDirty();
+  renderTracks();
+}
+
+function markDirty() {
+  dirty.add(currentArtist + ':::' + currentAlbum);
+  updateStats();
+}
+
+// ── Auto-fill ─────────────────────────────────────────
+function autoFillCurrent() {
+  if (!currentArtist || !currentAlbum) return;
+  doAutoFill(currentArtist, currentAlbum);
+  renderEditor();
+  toast('Auto-filled: ' + currentAlbum);
+}
+
+function autoFillAll() {
+  for (const artist of Object.keys(library)) {
+    for (const album of Object.keys(library[artist].albums)) {
+      doAutoFill(artist, album);
+    }
+  }
+  if (currentArtist && currentAlbum) renderEditor();
+  buildTree();
+  updateStats();
+  toast('Auto-filled entire library');
+}
+
+function isStandaloneFolder(artist, album) {
+  return album === artist;
+}
+
+function doAutoFill(artist, album) {
+  const data = library[artist].albums[album];
+  const standalone = isStandaloneFolder(artist, album);
+  data.tracks.forEach((t, i) => {
+    t.artist = standalone ? '' : artist;
+    t.album = album;
+    t.num = i + 1;
+    t.modified = true;
+  });
+  dirty.add(artist + ':::' + album);
+}
+
+// ── Art upload ────────────────────────────────────────
+function handleArtFile(event) {
+  const file = event.target.files[0];
+  if (!file || !currentArtist || !currentAlbum) return;
+  const url = URL.createObjectURL(file);
+  library[currentArtist].albums[currentAlbum].art = url;
+  library[currentArtist].albums[currentAlbum].artBlob = file;
+  markDirty();
+  // Update art box
+  const drop = document.getElementById('art-drop');
+  if (drop) {
+    let img = document.getElementById('art-img');
+    if (!img) { img = document.createElement('img'); img.id = 'art-img'; drop.prepend(img); }
+    img.src = url;
+  }
+  event.target.value = '';
+}
+
+// ── Save (writes metadata script + art) ──────────────
+function saveChanges() {
+  dirty.clear();
+  buildTree();
+  updateStats();
+  toast('Saved — use Export Script to write to files');
+}
+
+// ── Export ────────────────────────────────────────────
+function exportScript() {
+  const lines = [
+    '#!/usr/bin/env python3',
+    '# Audio Metadata Updater — generated by Audio Metadata Manager',
+    '# Requirements: pip install mutagen pillow',
+    '# Usage: python3 update_metadata.py',
+    '',
+    'import os, sys',
+    'from pathlib import Path',
+    'try:',
+    '    from mutagen.mp3 import MP3',
+    '    from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, APIC',
+    '    from mutagen.mp4 import MP4, MP4Cover',
+    '    from mutagen.asf import ASF',
+    'except ImportError:',
+    '    print("Install mutagen: pip install mutagen"); sys.exit(1)',
+    '',
+    'def set_mp3(path, title, artist, album, track, art_path=None):',
+    '    try:',
+    '        tags = ID3(path)',
+    '    except:',
+    '        tags = ID3()',
+    '    tags["TIT2"] = TIT2(encoding=3, text=title)',
+    '    tags["TPE1"] = TPE1(encoding=3, text=artist)',
+    '    tags["TALB"] = TALB(encoding=3, text=album)',
+    '    tags["TRCK"] = TRCK(encoding=3, text=str(track))',
+    '    if art_path and Path(art_path).exists():',
+    '        mime = "image/jpeg" if art_path.lower().endswith(".jpg") or art_path.lower().endswith(".jpeg") else "image/png"',
+    '        tags["APIC"] = APIC(encoding=3, mime=mime, type=3, desc="Cover", data=open(art_path,"rb").read())',
+    '    tags.save(path)',
+    '',
+    'def set_m4a(path, title, artist, album, track, art_path=None):',
+    '    tags = MP4(path)',
+    '    tags["\\xa9nam"] = [title]',
+    '    tags["\\xa9ART"] = [artist]',
+    '    tags["\\xa9alb"] = [album]',
+    '    tags["trkn"] = [(track, 0)]',
+    '    if art_path and Path(art_path).exists():',
+    '        fmt = MP4Cover.FORMAT_JPEG if art_path.lower().endswith((".jpg",".jpeg")) else MP4Cover.FORMAT_PNG',
+    '        tags["covr"] = [MP4Cover(open(art_path,"rb").read(), imageformat=fmt)]',
+    '    tags.save()',
+    '',
+    'def set_wma(path, title, artist, album, track):',
+    '    tags = ASF(path)',
+    '    tags["Title"] = [title]',
+    '    tags["Author"] = [artist]',
+    '    tags["WM/AlbumTitle"] = [album]',
+    '    tags["WM/TrackNumber"] = [str(track)]',
+    '    tags.save()',
+    '',
+    'TRACKS = ['
+  ];
+
+  for (const artist of Object.keys(library).sort()) {
+    for (const album of Object.keys(library[artist].albums).sort()) {
+      const data = library[artist].albums[album];
+      for (const t of data.tracks) {
+        if (!t.filename) continue;
+        const artPath = data.artBlob ? `__ART__/${artist}/${album}/cover.jpg` : '';
+        lines.push(`    {"artist": ${JSON.stringify(t.artist)}, "album": ${JSON.stringify(t.album)}, "title": ${JSON.stringify(t.title)}, "track": ${t.num}, "filename": ${JSON.stringify(t.filename)}, "folder": ${JSON.stringify(artist + '/' + album)}, "art": ${JSON.stringify(artPath)}},`);
+      }
+    }
+  }
+
+  lines.push(
+    ']',
+    '',
+    '# !! Set this to your music root folder !!',
+    'ROOT = Path(r"C:/YOUR/MUSIC/ROOT")',
+    '',
+    'processed = 0',
+    'errors = []',
+    'for t in TRACKS:',
+    '    path = ROOT / t["folder"] / t["filename"]',
+    '    if not path.exists():',
+    '        errors.append(f"Not found: {path}"); continue',
+    '    ext = path.suffix.lower()',
+    '    art = t["art"] or None',
+    '    try:',
+    '        if ext == ".mp3":    set_mp3(str(path), t["title"], t["artist"], t["album"], t["track"], art)',
+    '        elif ext == ".m4a":  set_m4a(str(path), t["title"], t["artist"], t["album"], t["track"], art)',
+    '        elif ext == ".wma":  set_wma(str(path), t["title"], t["artist"], t["album"], t["track"])',
+    '        processed += 1',
+    '        print(f"OK  {path.name}")',
+    '    except Exception as e:',
+    '        errors.append(f"Error {path}: {e}")',
+    '',
+    'print(f"\\nDone: {processed} files updated, {len(errors)} errors")',
+    'for e in errors: print(" !", e)',
+  );
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'update_metadata.py'; a.click();
+  URL.revokeObjectURL(url);
+  toast('Script downloaded — edit ROOT path then run with Python');
+}
+
+// ── Stats ─────────────────────────────────────────────
+function updateStats() {
+  let albums = 0, tracks = 0;
+  for (const a of Object.values(library)) {
+    albums += Object.keys(a.albums).length;
+    for (const alb of Object.values(a.albums)) tracks += alb.tracks.length;
+  }
+  document.getElementById('s-artists').textContent = Object.keys(library).length;
+  document.getElementById('s-albums').textContent = albums;
+  document.getElementById('s-tracks').textContent = tracks;
+  document.getElementById('s-dirty').textContent = dirty.size;
+}
+
+// ── Toast ─────────────────────────────────────────────
+let toastTimer;
+function toast(msg, err) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.borderColor = err ? 'var(--danger)' : 'var(--border2)';
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
+}
+</script>
+</body>
+</html>
