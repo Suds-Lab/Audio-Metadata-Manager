@@ -91,6 +91,8 @@
   #art-drop .art-icon { font-size: 20px; position: relative; z-index: 1; }
   #art-drop .art-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.15s; z-index: 2; font-size: 10px; color: #fff; }
   #art-drop:hover .art-overlay { opacity: 1; }
+  #art-drop.drag-over { border-color: var(--accent); background: var(--accent-bg); }
+  #art-drop.drag-over .art-overlay { opacity: 1; }
   #art-file { display: none; }
 
   #meta-fields { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-content: start; }
@@ -212,7 +214,6 @@ async function openFolder() {
     rootHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
     library = {};
     dirty.clear();
-    modifiedTracks.clear();
     await scanRoot(rootHandle);
     buildTree();
     updateStats();
@@ -412,7 +413,12 @@ function renderEditor() {
 
   editor.innerHTML = `
     <div id="album-meta">
-      <div id="art-drop" onclick="document.getElementById('art-file').click()" title="Click to upload album art">
+      <div id="art-drop"
+        onclick="document.getElementById('art-file').click()"
+        ondragover="artDragOver(event)"
+        ondragleave="artDragLeave(event)"
+        ondrop="artDrop(event)"
+        title="Click or drag an image to set album art">
         ${data.art ? `<img id="art-img" src="${data.art}" alt="album art">` : ''}
         <div class="art-overlay">Change art</div>
         ${!data.art ? `<div class="art-icon">⊞</div><div class="art-hint">Click to<br>upload art</div>` : ''}
@@ -552,26 +558,78 @@ function doAutoFill(artist, album) {
 // ── Art upload ────────────────────────────────────────
 function handleArtFile(event) {
   const file = event.target.files[0];
-  if (!file || !currentArtist || !currentAlbum) return;
+  if (!file) return;
+  applyArtFile(file);
+  event.target.value = '';
+}
+
+function artDragOver(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (!currentArtist || !currentAlbum) return;
+  const drop = document.getElementById('art-drop');
+  if (drop) drop.classList.add('drag-over');
+  const overlay = drop?.querySelector('.art-overlay');
+  if (overlay) overlay.textContent = 'Drop to set art';
+}
+
+function artDragLeave(e) {
+  e.preventDefault();
+  const drop = document.getElementById('art-drop');
+  if (drop) drop.classList.remove('drag-over');
+}
+
+function artDrop(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const drop = document.getElementById('art-drop');
+  if (drop) drop.classList.remove('drag-over');
+  const file = e.dataTransfer?.files?.[0];
+  if (!file || !file.type.startsWith('image/')) {
+    toast('Please drop an image file', true);
+    return;
+  }
+  applyArtFile(file);
+}
+
+function applyArtFile(file) {
+  if (!currentArtist || !currentAlbum) return;
   const reader = new FileReader();
   reader.onload = e => {
-    const dataUrl = e.target.result;
-    const b64 = dataUrl.split(',')[1];
-    const mime = file.type || 'image/jpeg';
-    const albumData = library[currentArtist].albums[currentAlbum];
-    albumData.art = dataUrl;
-    albumData.artB64 = b64;
-    albumData.artMime = mime;
-    markDirty();
-    const drop = document.getElementById('art-drop');
-    if (drop) {
-      let img = document.getElementById('art-img');
-      if (!img) { img = document.createElement('img'); img.id = 'art-img'; drop.prepend(img); }
-      img.src = dataUrl;
-    }
+    // Always normalise to JPEG via canvas — avoids broken covers from PNG/WEBP/etc
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      const jpegUrl = canvas.toDataURL('image/jpeg', 0.92);
+      const b64 = jpegUrl.split(',')[1];
+      const albumData = library[currentArtist].albums[currentAlbum];
+      albumData.art = jpegUrl;
+      albumData.artB64 = b64;
+      albumData.artMime = 'image/jpeg';
+      markDirty();
+      const drop = document.getElementById('art-drop');
+      if (drop) {
+        let imgEl = document.getElementById('art-img');
+        if (!imgEl) {
+          imgEl = document.createElement('img');
+          imgEl.id = 'art-img';
+          drop.prepend(imgEl);
+          // hide placeholder text once art is set
+          const hint = drop.querySelector('.art-hint');
+          const icon = drop.querySelector('.art-icon');
+          if (hint) hint.style.display = 'none';
+          if (icon) icon.style.display = 'none';
+        }
+        imgEl.src = jpegUrl;
+      }
+    };
+    img.src = e.target.result;
   };
   reader.readAsDataURL(file);
-  event.target.value = '';
 }
 
 // ── Save (writes metadata script + art) ──────────────
@@ -584,34 +642,40 @@ function saveChanges() {
 
 // ── Export ────────────────────────────────────────────
 function exportScript() {
-  const lines = [
+  // Build the script as a single string to avoid any ordering bugs.
+  // Order: imports → helper functions → ART_DATA → TRACKS → runtime code.
+
+  // 1. Static header + helper functions
+  const header = [
     '#!/usr/bin/env python3',
     '# Audio Metadata Updater — generated by Audio Metadata Manager',
-    '# Requirements: pip install mutagen pillow',
-    '# Usage: python3 update_metadata.py',
+    '# Requirements: pip install mutagen',
+    '# Usage: python update_metadata.py  (run from your music root folder)',
     '',
-    'import os, sys',
+    'import sys, base64',
     'from pathlib import Path',
+    '',
     'try:',
-    '    from mutagen.mp3 import MP3',
     '    from mutagen.id3 import ID3, TIT2, TPE1, TALB, TRCK, APIC',
     '    from mutagen.mp4 import MP4, MP4Cover',
     '    from mutagen.asf import ASF',
     'except ImportError:',
-    '    print("Install mutagen: pip install mutagen"); sys.exit(1)',
+    '    print("mutagen not found. Run: pip install mutagen")',
+    '    sys.exit(1)',
     '',
     'def set_mp3(path, title, artist, album, track, art_path=None):',
     '    try:',
     '        tags = ID3(path)',
-    '    except:',
+    '    except Exception:',
     '        tags = ID3()',
     '    tags["TIT2"] = TIT2(encoding=3, text=title)',
     '    tags["TPE1"] = TPE1(encoding=3, text=artist)',
     '    tags["TALB"] = TALB(encoding=3, text=album)',
     '    tags["TRCK"] = TRCK(encoding=3, text=str(track))',
     '    if art_path and Path(art_path).exists():',
-    '        mime = "image/jpeg" if art_path.lower().endswith(".jpg") or art_path.lower().endswith(".jpeg") else "image/png"',
-    '        tags["APIC"] = APIC(encoding=3, mime=mime, type=3, desc="Cover", data=open(art_path,"rb").read())',
+    '        mime = "image/png" if art_path.lower().endswith(".png") else "image/jpeg"',
+    '        tags["APIC"] = APIC(encoding=3, mime=mime, type=3, desc="Cover",',
+    '                            data=open(art_path, "rb").read())',
     '    tags.save(path)',
     '',
     'def set_m4a(path, title, artist, album, track, art_path=None):',
@@ -621,8 +685,8 @@ function exportScript() {
     '    tags["\\xa9alb"] = [album]',
     '    tags["trkn"] = [(track, 0)]',
     '    if art_path and Path(art_path).exists():',
-    '        fmt = MP4Cover.FORMAT_JPEG if art_path.lower().endswith((".jpg",".jpeg")) else MP4Cover.FORMAT_PNG',
-    '        tags["covr"] = [MP4Cover(open(art_path,"rb").read(), imageformat=fmt)]',
+    '        fmt = MP4Cover.FORMAT_PNG if art_path.lower().endswith(".png") else MP4Cover.FORMAT_JPEG',
+    '        tags["covr"] = [MP4Cover(open(art_path, "rb").read(), imageformat=fmt)]',
     '    tags.save()',
     '',
     'def set_wma(path, title, artist, album, track):',
@@ -633,84 +697,109 @@ function exportScript() {
     '    tags["WM/TrackNumber"] = [str(track)]',
     '    tags.save()',
     '',
-    'TRACKS = ['
-  ];
-
-  // Build ART dict: key = "artist:::album", value = {b64, mime}
+  ].join('\n') + '\n';
+  // 2. ART_DATA — base64 encoded cover images uploaded in the GUI
   const artDict = {};
   for (const artist of Object.keys(library).sort()) {
     for (const album of Object.keys(library[artist].albums).sort()) {
       const data = library[artist].albums[album];
       if (data.artB64) {
-        artDict[artist + ':::' + album] = { b64: data.artB64, mime: data.artMime || 'image/jpeg' };
+        artDict[artist + ':::' + album] = {
+          b64: data.artB64,
+          mime: data.artMime || 'image/jpeg',
+          ext: (data.artMime === 'image/png') ? 'png' : 'jpg'
+        };
       }
     }
   }
 
-  // Emit ART_DATA dict
-  lines.push('ART_DATA = {');
+  let artSection = 'ART_DATA = {\n';
   for (const [key, val] of Object.entries(artDict)) {
-    const ext2 = val.mime === 'image/png' ? 'png' : 'jpg';
-    lines.push(`    ${JSON.stringify(key)}: {"b64": ${JSON.stringify(val.b64)}, "mime": ${JSON.stringify(val.mime)}, "ext": ${JSON.stringify(ext2)}},`);
+    artSection += '    ' + JSON.stringify(key) + ': {'
+      + '"b64": ' + JSON.stringify(val.b64) + ', '
+      + '"mime": ' + JSON.stringify(val.mime) + ', '
+      + '"ext": ' + JSON.stringify(val.ext) + '},\n';
   }
-  lines.push('}');
-  lines.push('');
+  artSection += '}\n\n';
 
-  // Emit TRACKS list
+  // 3. TRACKS list — only include tracks that were modified, or any track in an album with new art
+  let totalModified = 0;
+  let tracksSection = 'TRACKS = [\n';
   for (const artist of Object.keys(library).sort()) {
     for (const album of Object.keys(library[artist].albums).sort()) {
       const data = library[artist].albums[album];
-      const artKey = (data.artB64) ? (artist + ':::' + album) : '';
+      const artKey = data.artB64 ? (artist + ':::' + album) : '';
       for (const t of data.tracks) {
         if (!t.filename) continue;
-        lines.push(`    {"artist": ${JSON.stringify(t.artist)}, "album": ${JSON.stringify(t.album)}, "title": ${JSON.stringify(t.title)}, "track": ${t.num}, "filename": ${JSON.stringify(t.filename)}, "folder": ${JSON.stringify(artist + '/' + album)}, "art_key": ${JSON.stringify(artKey)}},`);
+        // include if track metadata was edited, OR if album has new art to embed
+        if (!t.modified && !data.artB64) continue;
+        totalModified++;
+        tracksSection += '    {'
+          + '"artist": ' + JSON.stringify(t.artist) + ', '
+          + '"album": ' + JSON.stringify(t.album) + ', '
+          + '"title": ' + JSON.stringify(t.title) + ', '
+          + '"track": ' + (t.num || 0) + ', '
+          + '"filename": ' + JSON.stringify(t.filename) + ', '
+          + '"folder": ' + JSON.stringify(artist + '/' + album) + ', '
+          + '"art_key": ' + JSON.stringify(artKey) + '},\n';
       }
     }
   }
+  tracksSection += ']\n\n';
+  if (totalModified === 0) {
+    toast('No changes to export — edit some tracks or upload album art first', true);
+    return;
+  }
 
-  lines.push(
-    ']',
-    '',
-    '# Script runs from the music root directory (place it there and run: python3 update_metadata.py)',
+  // 4. Runtime — write art, then apply metadata
+  const runtime = [
+    '# Place this script in your music root folder and run: python update_metadata.py',
     'ROOT = Path(__file__).parent',
     '',
-    '# Write uploaded art to disk first',
-    'import base64, tempfile',
+    '# Write uploaded art to disk',
     'art_paths = {}',
     'for key, art in ART_DATA.items():',
     '    artist_p, album_p = key.split(":::", 1)',
-    '    dest = ROOT / artist_p / album_p / f"cover.{art[\'ext\']}"',
+    '    dest = ROOT / artist_p / album_p / ("cover." + art["ext"])',
     '    dest.parent.mkdir(parents=True, exist_ok=True)',
     '    dest.write_bytes(base64.b64decode(art["b64"]))',
     '    art_paths[key] = str(dest)',
-    '    print(f"Art  {dest.relative_to(ROOT)}")',
+    '    print("Art ", dest.relative_to(ROOT))',
     '',
+    '# Apply metadata',
     'processed = 0',
     'errors = []',
     'for t in TRACKS:',
     '    path = ROOT / t["folder"] / t["filename"]',
     '    if not path.exists():',
-    '        errors.append(f"Not found: {path}"); continue',
+    '        errors.append("Not found: " + str(path))',
+    '        continue',
     '    ext = path.suffix.lower()',
     '    art = art_paths.get(t["art_key"]) if t["art_key"] else None',
     '    try:',
-    '        if ext == ".mp3":    set_mp3(str(path), t["title"], t["artist"], t["album"], t["track"], art)',
-    '        elif ext == ".m4a":  set_m4a(str(path), t["title"], t["artist"], t["album"], t["track"], art)',
-    '        elif ext == ".wma":  set_wma(str(path), t["title"], t["artist"], t["album"], t["track"])',
+    '        if ext == ".mp3":',
+    '            set_mp3(str(path), t["title"], t["artist"], t["album"], t["track"], art)',
+    '        elif ext == ".m4a":',
+    '            set_m4a(str(path), t["title"], t["artist"], t["album"], t["track"], art)',
+    '        elif ext == ".wma":',
+    '            set_wma(str(path), t["title"], t["artist"], t["album"], t["track"])',
     '        processed += 1',
-    '        print(f"OK   {path.name}")',
+    '        print("OK  ", path.name)',
     '    except Exception as e:',
-    '        errors.append(f"Error {path}: {e}")',
+    '        errors.append("Error " + str(path) + ": " + str(e))',
     '',
-    'print(f"\\nDone: {processed} files updated, {len(errors)} errors")',
-    'for e in errors: print(" !", e)',
-  );
+    'print("")',
+    'print("Done:", processed, "files updated,", len(errors), "errors")',
+    'for e in errors:',
+    '    print("  !", e)',
+  ].join('\n');
 
-  const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+  const script = header + artSection + tracksSection + runtime;
+  const blob = new Blob([script], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = 'update_metadata.py'; a.click();
   URL.revokeObjectURL(url);
-  toast('Script downloaded — drop it in your music root folder and run with Python');
+  toast('Script downloaded — drop it in your music root folder and run: python update_metadata.py');
 }
 
 // ── Stats ─────────────────────────────────────────────
